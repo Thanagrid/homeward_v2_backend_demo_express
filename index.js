@@ -3,7 +3,7 @@ require('dotenv').config();
 const cookieParser = require('cookie-parser')
 const express = require('express')
 const app = express()
-const port = 3030
+const port = process.env.PORT || 3030
 const jwt = require('jsonwebtoken')
 const bcrypt = require('bcrypt')
 const { Pool } = require('pg')
@@ -17,31 +17,30 @@ const jwt_secret_key = process.env.JWT_SECRET_KEY
 
 // DB
 const db = new Pool({
-  user: 'postgres',
-  host: 'localhost',
-  database: 'homeward_db_v2_mockup',
-  password: 'postgres',
-  port: 5432,
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME,
+  password: process.env.DB_PASSWORD,
+  port: parseInt(process.env.DB_PORT) || 5432,
 })
 
-// create hash password
-app.post('/api/create/hash-password', async (req, res)=>{
+// create hash password (dev utility)
+app.post('/api/create/hash-password', async (req, res) => {
    const {password} = req.body
 
-   try{
+   try {
       const hash = await bcrypt.hash(password, 10)
       return res.status(200).json({
          success: true,
          message: 'สร้าง hash password สำเร็จ',
          hash: hash
       })
-   }catch(error){
+   } catch(error) {
       console.error(error);
-      return {
+      return res.status(500).json({
          success: false,
          message: 'มีบางอย่างผิดพลาด โปรดลองอีกครั้งในภายหลัง',
-      }
-      
+      })
    }
 })
 
@@ -50,14 +49,35 @@ app.post('/api/login', async (req, res) => {
    const {username, password} = req.body
 
    try{
+      if (!username || !password) {
+         return res.status(400).json({
+            success: false,
+            message: "ชื่อผู้ใช้ หรือรหัสผ่านไม่ถูกต้อง"
+         })
+      }
+
       const result = await db.query('SELECT * from users WHERE username = $1', [username])
       const user = result.rows[0]
-      
+
+      if (!user) {
+         return res.status(400).json({
+            success: false,
+            message: "ชื่อผู้ใช้ หรือรหัสผ่านไม่ถูกต้อง"
+         })
+      }
+
       const match = await bcrypt.compare(password, user.password)
       if (!match) {
          return res.status(400).json({
             success: false,
             message: "ชื่อผู้ใช้ หรือรหัสผ่านไม่ถูกต้อง"
+         })
+      }
+
+      if (user.is_blocked) {
+         return res.status(403).json({
+            success: false,
+            message: "บัญชีนี้ถูกระงับการใช้งาน"
          })
       }
 
@@ -70,8 +90,8 @@ app.post('/api/login', async (req, res) => {
          user_token: user_token
       })
 
-   }catch(error){
-      console.log(error);
+   } catch(error) {
+      console.error(error);
       return res.status(400).json({
          success: false,
          message: "ชื่อผู้ใช้ หรือรหัสผ่านไม่ถูกต้อง"
@@ -102,8 +122,8 @@ app.get('/api/get-user-person',verifyToken , async (req, res) => {
          person: result.rows[0]
       })
 
-   }catch(error){
-      console.log(error);
+   } catch(error) {
+      console.error(error);
       return res.status(400).json({
          success: false,
          message: "มีบางอย่างผิดพลาด โปรดลองอีกครั้งในภายหลัง"
@@ -136,8 +156,8 @@ app.get('/api/get-user-role',verifyToken , async (req, res) => {
          role: result.rows
       })
 
-   }catch(error){
-      console.log(error);
+   } catch(error) {
+      console.error(error);
       return res.status(400).json({
          success: false,
          message: "มีบางอย่างผิดพลาด โปรดลองอีกครั้งในภายหลัง"
@@ -165,8 +185,8 @@ app.post('/api/select-role', verifyToken, async (req, res) => {
         // 3. Query ตรวจสอบว่า User คนนี้ มีสิทธิ์ใน Role ID นี้จริงหรือไม่
         // และดึงข้อมูลที่จำเป็นมาใส่ใน Token ใหม่เลย (role, hcode, health_region)
         const query = `
-            SELECT role_id, role, hcode, health_region
-            FROM roles 
+            SELECT role_id, role, hcode, health_region, is_blocked
+            FROM roles
             WHERE user_id = $1 AND role_id = $2
         `;
         
@@ -256,20 +276,6 @@ app.get('/api/role-test', verifyToken, (req, res) => {
 });
 
 
-// listen
-app.listen(port, async () => {
-    try {
-        // ลอง Query เวลาปัจจุบันดู เพื่อเช็คว่าต่อ DB ติดมั้ย
-        await db.query('SELECT NOW()') 
-        console.log('✅ Database connected successfully')
-        console.log(`🚀 Server running at http://127.0.0.1:${port}`)
-    } catch (error) {
-        console.error('❌ Database connection failed:', error)
-        // ถ้าต่อ DB ไม่ได้ ให้ปิด Server ไปเลย (จะได้ไม่หลอกตัวเองว่ารันผ่าน)
-        process.exit(1) 
-    }
-})
-
 // get all staff
 app.get('/api/get-all-staff', verifyToken, async (req, res) => {
    try {
@@ -302,7 +308,7 @@ app.get('/api/get-all-staff', verifyToken, async (req, res) => {
       });
 
    } catch (error) {
-      console.log(error);
+      console.error(error);
       return res.status(500).json({
          success: false,
          message: "มีบางอย่างผิดพลาด โปรดลองอีกครั้งในภายหลัง"
@@ -471,3 +477,15 @@ app.get('/api/get-death-patients', verifyToken, async (req, res) => {
    `;
    await runPatientQuery(req, res, query, "ดึงข้อมูลผู้ป่วยที่เสียชีวิตสำเร็จ", "Get Death Patients");
 });
+
+// listen
+app.listen(port, async () => {
+    try {
+        await db.query('SELECT NOW()')
+        console.log('✅ Database connected successfully')
+        console.log(`🚀 Server running at http://127.0.0.1:${port}`)
+    } catch (error) {
+        console.error('❌ Database connection failed:', error)
+        process.exit(1)
+    }
+})
